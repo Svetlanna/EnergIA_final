@@ -3,19 +3,16 @@ from pathlib import Path
 
 import pandas as pd
 
-
 RACINE_PROJET = Path(__file__).resolve().parent.parent
 DOSSIER_DATA = RACINE_PROJET / "data"
 
 
 # ---------- Lecture ----------
-
 def lire_json(nom_fichier):
     with (DOSSIER_DATA / nom_fichier).open(
         "r", encoding="utf-8"
     ) as fichier:
         return json.load(fichier)
-
 
 # ---------- Toutes les mesures électriques ----------
 
@@ -247,13 +244,17 @@ if __name__ == "__main__":
 
     colonnes = [
         "libelle_region",
-        "date_heure",
-        "consommation",
-        "temperature_2m",
-        "relative_humidity_2m",
+        "annee",
+        "mois",
+        "jour_semaine",
+        "heure_locale",
         "weekend",
         "ferie",
         "vacances_scolaires",
+        "saison_hiver",
+        "saison_printemps",
+        "saison_ete",
+        "saison_automne",
     ]
 
     print("\nAperçu :")
