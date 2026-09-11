@@ -2,35 +2,39 @@ import pandas as pd
 
 df = pd.read_csv("data/dataset_final.csv")
 
-df["datetime"] = pd.to_datetime(
-    df["date"].astype(str) + " " + df["heure"].astype(str)
-)
 
-df["mois"] = df["datetime"].dt.month
-df["jour"] = df["datetime"].dt.day
-df["jour_semaine"] = df["datetime"].dt.dayofweek
-df["heure_num"] = df["datetime"].dt.hour
-df["minute"] = df["datetime"].dt.minute
+def nettoyer_donnees(df):
 
-df["weekend"] = df["jour_semaine"].isin([5, 6])
+    df = df.copy()
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
 
-def get_saison(mois):
-    if mois in [12, 1, 2]:
-        return "hiver"
-    elif mois in [3, 4, 5]:
-        return "printemps"
-    elif mois in [6, 7, 8]:
-        return "ete"
-    else:
-        return "automne"
+    # devient NaN : un nombre manquant.
+    df["consommation"] = pd.to_numeric(
+        df["consommation"],
+        errors="coerce"
+    )
+    df = df.dropna(subset=["date"])
 
-df["saison"] = df["mois"].apply(get_saison)
+    df = df.sort_values("date")
 
-def get_feries(ferie):
-    if ferie == True:
-        return 1
-    else:
-        return 0
+    return df
 
-df["ferie"] = df["ferie"].apply(get_feries)
-print(df["ferie"].sum())
+
+def ajouter_calendrier(df):
+    df = df.copy()
+
+    df["jour_semaine"] = df["date"].dt.dayofweek
+
+    df["est_weekend"] = (
+        df["jour_semaine"] >= 5
+    ).astype(int)
+
+    df["mois"] = df["date"].dt.month
+
+
+    df["heure"] = df["date"].dt.hour
+
+    return df
+
+
+
