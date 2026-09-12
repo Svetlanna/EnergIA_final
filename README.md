@@ -1,331 +1,350 @@
-# EnergIA — Prédiction de la consommation électrique par région
+# EnergIA — Prévision de la consommation électrique régionale
 
-Projet pédagogique pour apprendre le machine learning avec Python et scikit-learn, étape par étape.
+EnergIA collecte des données publiques d’électricité, de météo et de calendrier, construit un dataset régional et entraîne un modèle de régression pour estimer la consommation électrique à un pas de 30 minutes.
 
-L’objectif est d’estimer la consommation électrique pour une région et un créneau de 30 minutes. La version actuelle utilise une **régression linéaire commune aux 12 régions du dataset**, entraînée sur une partie de 2025 et évaluée sur une période plus récente.
+La version actuelle est un premier modèle de référence utilisant la région et le calendrier. Son évaluation porte sur une période historique distincte de l’entraînement.
 
-## État actuel
+| Élément | État actuel |
+|---|---|
+| Données | Année 2025, 210 240 observations |
+| Périmètre | 12 régions métropolitaines, hors Corse |
+| Granularité | Une région par créneau de 30 minutes |
+| Modèle | Régression linéaire dans une Pipeline scikit-learn |
+| Entraînement | Janvier à août 2025 |
+| Validation | Septembre et octobre 2025 |
+| MAE de validation rapportée | **1 175,24**, dans l’unité de la cible |
+| Test final | Novembre et décembre 2025, non évalué |
 
-- Lecture et préparation du CSV réalisées.
-- Séparation chronologique entre entraînement, validation et test réalisée.
-- Encodage des régions et entraînement d’une régression linéaire réalisés.
-- Prédictions sur septembre et octobre 2025 réalisées.
-- Erreur absolue moyenne de validation observée : **1 175,24**.
-- Test final de novembre et décembre conservé pour la suite, sans évaluation à ce stade.
+## Sommaire
 
-Le projet réalise actuellement une évaluation historique : les consommations réelles existent déjà et permettent de vérifier les prédictions. La génération de données pour une période future et la sauvegarde du modèle ne sont pas encore implémentées.
+- [Architecture](#architecture)
+- [Sources de données et API](#sources-de-données-et-api)
+- [Construction du dataset](#construction-du-dataset)
+- [Modélisation et évaluation](#modélisation-et-évaluation)
+- [Installation et exécution](#installation-et-exécution)
+- [Configuration et reproductibilité](#configuration-et-reproductibilité)
+- [Limites et feuille de route](#limites-et-feuille-de-route)
 
-## Organisation du projet
+## Architecture
+
+Le traitement comprend trois phases : extraction des sources JSON, fusion dans un CSV, puis apprentissage et validation.
+
+```mermaid
+flowchart LR
+    A["ODRÉ / éCO2mix"] --> E["etl/ectraction.py"]
+    B["Open-Meteo Archive"] --> E
+    C["API jours fériés"] --> E
+    D["Calendrier scolaire"] --> E
+    E --> F["data/*.json"]
+    F --> G["etl/dataframe.py"]
+    G --> H["data/dataset_final.csv"]
+    H --> I["ConsomationML.py"]
+    I --> J["Prédictions de validation et MAE"]
+```
 
 ```text
 EnergIA_final/
-├── ConsomationML.py                 # Préparation, apprentissage et validation
-├── index.py                        # Fichier présent, actuellement vide
+├── ConsomationML.py                 # Prétraitement, modèle et validation
+├── index.py                        # Point d’entrée non implémenté
 ├── etl/
-│   ├── ectraction.py                # Téléchargement des données sources
-│   └── dataframe.py                 # Fusion et création du CSV
-└── data/
-    ├── dataset_final.csv           # Données utilisées par le modèle
-    ├── eco2mix-regional.json
-    ├── meteo-regions.json
-    ├── calendrier-2025.json
-    └── vacances-scolaires-regions.json
+│   ├── ectraction.py                # Collecte des quatre sources
+│   └── dataframe.py                 # Normalisation, jointures et export CSV
+├── data/                           # Données locales, ignorées par Git
+│   ├── eco2mix-regional.json
+│   ├── meteo-regions.json
+│   ├── calendrier-2025.json
+│   ├── vacances-scolaires-regions.json
+│   └── dataset_final.csv
+├── Data Consumption Prediction.png
+└── README.md
 ```
 
-Le nom `ectraction.py` correspond au nom actuel du fichier.
+Les noms `ectraction.py` et `ConsomationML.py` correspondent aux fichiers existants. Le projet consomme des API externes ; il n’expose pas encore d’API de prédiction.
 
-## Données utilisées
+## Sources de données et API
 
-Le dataset examiné contient **210 240 lignes pour l’année 2025**, soit **17 520 observations par région**, à un pas de 30 minutes.
+Les appels sont effectués en HTTP GET avec `requests`. Aucune clé ni aucun en-tête d’authentification n’est configuré dans le code. Les conditions d’accès et de réutilisation sont celles des fournisseurs. Les réponses sont conservées localement en JSON UTF-8 avant transformation.
 
-Les 12 régions présentes sont : Auvergne-Rhône-Alpes, Bourgogne-Franche-Comté, Bretagne, Centre-Val de Loire, Grand Est, Hauts-de-France, Île-de-France, Normandie, Nouvelle-Aquitaine, Occitanie, Pays de la Loire et Provence-Alpes-Côte d’Azur.
+### Électricité — ODRÉ / éCO2mix
 
-**Le périmètre ne couvre pas toute la France : la Corse et les régions d’outre-mer sont absentes.**
+**Objectif :** obtenir la consommation observée, cible du modèle, ainsi que les identifiants régionaux et les horodatages.
 
-Les scripts d’extraction utilisent les données électriques éCO2mix régionales, la météo historique Open-Meteo et des calendriers de jours fériés et de vacances scolaires. La météo est associée à une ville de référence par région.
+[Fiche officielle du dataset éCO2mix régional](https://odre.opendatasoft.com/explore/dataset/eco2mix-regional-cons-def/).
 
-Le CSV contient davantage de colonnes que celles utilisées par le modèle. Dans la version actuelle, la météo et les mesures de production électrique ne font pas partie des variables d’entrée.
+```text
+GET https://odre.opendatasoft.com/api/explore/v2.1/catalog/datasets/eco2mix-regional-cons-def/exports/json
+```
 
-## Bibliothèques et rôles
+La source contient les mesures régionales consolidées et définitives au pas de la demi-heure, dont la consommation, les productions par filière, le pompage et les échanges. Le script réalise un export par mois pour `ANNEE = 2025`.
 
-| Outil | Utilisation |
+| Paramètre | Valeur envoyée | Utilisation |
+|---|---|---|
+| `where` | `startswith(date, '2025-MM')` | Filtre mensuel |
+| `order_by` | `date_heure ASC, code_insee_region ASC` | Ordre des observations |
+| `limit` | `-1` | Demande d’export complet |
+
+**Champs exploités :** `code_insee_region`, `libelle_region`, `date`, `heure`, `date_heure`, `consommation`. Les autres champs électriques sont conservés dans le dataset, mais exclus du modèle actuel.
+
+**Contrôles :** réponse JSON non vide et présence d’au moins une consommation non nulle pour chaque couple région/jour attendu. Ce contrôle ne vérifie pas chaque demi-heure ni les doublons.
+
+**Sortie :** `data/eco2mix-regional.json`. Le script enveloppe les observations dans une structure `annee`, `source`, `nhits`, `records`, avec chaque ligne placée dans `records[].fields`.
+
+### Météo — Open-Meteo Historical Weather API
+
+**Objectif :** enrichir le dataset avec la température et l’humidité horaires. Ces variables ne sont pas encore intégrées dans la régression.
+
+[Documentation de l’API historique Open-Meteo](https://open-meteo.com/en/docs/historical-weather-api).
+
+```text
+GET https://archive-api.open-meteo.com/v1/archive
+```
+
+| Paramètre | Valeur ou origine |
 |---|---|
-| `pathlib.Path` | Construire les chemins des fichiers ; fourni avec Python |
-| `pandas` | Lire le CSV, préparer les colonnes et sélectionner les périodes |
-| `OneHotEncoder` | Transformer les noms de régions en indicateurs numériques |
-| `ColumnTransformer` | Encoder la région et conserver les autres colonnes |
-| `Pipeline` | Enchaîner la préparation et la régression |
-| `LinearRegression` | Apprendre une formule d’estimation de la consommation |
-| `mean_absolute_error` | Mesurer l’écart moyen entre prédictions et réalité |
-| `requests` | Télécharger les données dans le script d’extraction |
+| `latitude`, `longitude` | Ville de référence de chaque région |
+| `start_date`, `end_date` | Dates extrêmes des observations électriques converties en UTC |
+| `hourly` | `temperature_2m,relative_humidity_2m` |
+| `timezone` | `UTC` |
 
-`scikit-learn` est le nom de la bibliothèque à installer ; `sklearn` est le nom utilisé dans les imports Python.
+Le script réalise une requête par région et vérifie la présence de `hourly.time`. Les variables représentent la température et l’humidité relative à deux mètres. L’API historique s’appuie notamment sur des réanalyses ; elle ne représente pas les prévisions disponibles à l’avance.
 
-## Exécuter le modèle
+| Code INSEE | Région | Référence météo |
+|---|---|---|
+| 11 | Île-de-France | Paris |
+| 24 | Centre-Val de Loire | Orléans |
+| 27 | Bourgogne-Franche-Comté | Dijon |
+| 28 | Normandie | Rouen |
+| 32 | Hauts-de-France | Lille |
+| 44 | Grand Est | Strasbourg |
+| 52 | Pays de la Loire | Nantes |
+| 53 | Bretagne | Rennes |
+| 75 | Nouvelle-Aquitaine | Bordeaux |
+| 76 | Occitanie | Toulouse |
+| 84 | Auvergne-Rhône-Alpes | Lyon |
+| 93 | Provence-Alpes-Côte d’Azur | Marseille |
 
-Depuis un terminal ouvert à la racine du projet, avec l’environnement Python du projet activé :
+**Sortie :** `data/meteo-regions.json`, contenant une liste `regions` avec les identifiants, la ville, les coordonnées demandées et la réponse météo. La fusion contrôle que `utc_offset_seconds` vaut zéro.
 
-```powershell
-python -m pip install pandas scikit-learn
-python ConsomationML.py
+### Jours fériés — API gouvernementale
+
+**Objectif :** construire les indicateurs journaliers de jour férié et de week-end.
+
+[Documentation de l’API des jours fériés](https://calendrier.api.gouv.fr/jours-feries/).
+
+```text
+GET https://calendrier.api.gouv.fr/jours-feries/metropole/2025.json
 ```
 
-Le fichier `data/dataset_final.csv` doit déjà être présent. Le script calcule son chemin à partir de l’emplacement de `ConsomationML.py`.
+L’année est injectée dans l’URL depuis `ANNEE`. Le script attend un objet associant dates et noms de jours fériés. Il parcourt ensuite chaque jour de l’année pour produire `date`, `jour_semaine`, `weekend`, `ferie` et `nom_ferie`.
 
-Chaque exécution entraîne à nouveau le modèle puis affiche les premières prédictions et la MAE. Le modèle n’est pas enregistré sur disque.
+**Sortie :** `data/calendrier-2025.json`.
 
-Pour travailler sur l’extraction des sources, `requests` est également nécessaire. Les scripts ETL téléchargent ou réécrivent des fichiers de données ; leur exécution n’est pas nécessaire pour entraîner le modèle si le CSV est déjà disponible. Leur relancement n’a pas été vérifié dans cette étape du projet.
+Le code utilise uniquement la zone `metropole`, sans calendrier complémentaire pour les particularités locales.
 
-## Les étapes du modèle
+### Vacances scolaires — Éducation nationale
 
-### 1. Lire le CSV
+**Objectif :** déterminer l’indicateur de vacances par région et par date locale.
 
-```python
-df = pd.read_csv(
-    chemin_csv,
-    sep=None,
-    engine="python",
-    encoding="utf-8-sig",
-)
+[Fiche officielle du calendrier scolaire](https://data.education.gouv.fr/explore/dataset/fr-en-calendrier-scolaire/).
+
+```text
+GET https://data.education.gouv.fr/api/explore/v2.1/catalog/datasets/fr-en-calendrier-scolaire/exports/json
 ```
 
-`df` est un DataFrame : un tableau dans lequel chaque ligne correspond à une observation et chaque colonne à une information.
+L’appel ne transmet aucun filtre annuel. Après vérification d’une réponse non vide, le script associe `location` à une région grâce à `REGIONS_ACADEMIES` et ajoute `libelle_region`. Les académies sans correspondance sont signalées.
 
-### 2. Préparer les données
+**Champs exploités :** `location`, `population`, `start_date`, `end_date`, `annee_scolaire` et la région ajoutée localement.
 
-```python
-df = preparer_donnees(df)
-df["minute"] = df["heure"].str.split(":").str[1].astype(int)
-```
+**Sortie :** `data/vacances-scolaires-regions.json`.
 
-La fonction `preparer_donnees` :
+La fusion exclut les lignes sans région et celles dont `population` vaut `Enseignants`. L’indicateur régional vaut vrai si au moins une période associée contient la date. Il ne représente pas la proportion d’élèves en vacances dans les régions regroupant plusieurs académies.
 
-- retire les espaces autour des noms de colonnes ;
-- convertit `date_locale` en date et signale les dates invalides ;
-- convertit les indicateurs de jours fériés et de vacances en 0 ou 1 ;
-- extrait l’année, le mois et le jour de la semaine ;
-- crée les indicateurs de week-end et de saisons ;
-- convertit les mesures numériques, en acceptant les virgules décimales.
+### Gestion HTTP et persistance
 
-La colonne `minute` permet de distinguer, par exemple, 18 h et 18 h 30. Toutes les colonnes préparées ne sont pas nécessairement utilisées par le modèle.
+Les collectes électriques et météorologiques utilisent `requests.Session` avec des délais de connexion et de lecture de 15 et 180 secondes. Les calendriers utilisent un délai de 60 secondes. `raise_for_status()` interrompt le traitement en cas d’erreur HTTP.
 
-Cette étape prépare les exemples ; elle n’entraîne pas le modèle. Les conversions numériques utilisent `errors="coerce"` : une valeur non convertible devient manquante. Une vérification des valeurs manquantes reste donc nécessaire si le CSV change.
+Il n’existe pas encore de reprise automatique ni de nouvelle tentative après un échec ou un quota. Les fichiers locaux permettent de relancer le modèle hors ligne ; l’extracteur les réécrit lors d’une nouvelle collecte.
 
-### 3. Définir les informations X et la réponse y
+## Construction du dataset
 
-```python
-colonnes = [
-    "libelle_region",
-    "mois",
-    "jour_semaine",
-    "heure_locale",
-    "minute",
-    "ferie",
-    "vacances_scolaires",
-]
+### Normalisation
 
-X = df[colonnes].copy()
-y = df["consommation"].copy()
-```
+`etl/dataframe.py` normalise les codes INSEE sur deux caractères, convertit `date_heure` en UTC, puis crée deux références temporelles :
 
-- **X** contient les sept informations que le modèle reçoit.
-- **y** contient la consommation réelle qu’il doit apprendre à estimer.
+- `heure_utc`, arrondie à l’heure inférieure pour joindre la météo ;
+- `date_locale` et les variables calendaires, calculées en fuseau `Europe/Paris`.
 
-L’objectif est une **régression supervisée** : prédire un nombre à partir d’exemples pour lesquels la réponse est connue. La consommation n’est pas dans X, puisqu’elle représente la valeur recherchée.
+Les observations électriques de 18 h et 18 h 30 UTC reçoivent ainsi la même météo horaire de 18 h UTC, sans interpolation.
 
-### 4. Séparer les périodes
+### Jointures et règles métier
 
-```python
-masque_train = df["date_locale"] < "2025-09-01"
-masque_validation = (
-    (df["date_locale"] >= "2025-09-01")
-    & (df["date_locale"] < "2025-11-01")
-)
-masque_test = df["date_locale"] >= "2025-11-01"
-```
+| Enrichissement | Clés | Jointure |
+|---|---|---|
+| Météo | `code_insee_region`, `heure_utc` | Gauche, `many_to_one` |
+| Jours fériés | `date_locale` | Gauche, `many_to_one` |
+| Vacances | `libelle_region`, `date_locale` | Gauche, `many_to_one` |
 
-Ces filtres correspondent aux périodes suivantes pour le CSV 2025 actuel :
+Les jointures conservent les observations électriques même si un enrichissement est absent. `many_to_one` contrôle l’unicité des clés dans les tableaux d’enrichissement.
 
-| Partie | Période | Nombre de lignes | Rôle |
-|---|---|---:|---|
-| Entraînement | 1er janvier au 31 août | 139 968 | Apprendre |
-| Validation | 1er septembre au 31 octobre | 35 136 | Comparer et améliorer les modèles |
-| Test | 1er novembre au 31 décembre | 35 136 | Évaluer le choix final |
+Pour les vacances, l’intervalle est `début <= date < fin`. L’année scolaire est déterminée avec une bascule au 1er septembre. Si aucun calendrier applicable n’est identifié, l’indicateur peut rester manquant.
 
-Les filtres d’entraînement et de test ne contiennent respectivement pas de borne inférieure et de borne supérieure. Il faudra revoir les périodes si le fichier contient d’autres années.
+Le résultat est trié par `date_heure` et `code_insee_region`, puis destiné à un export CSV UTF-8 avec BOM, sans index pandas. Un défaut de l’aperçu précédant l’export est documenté dans la section d’exécution.
 
-```python
-X_train = X.loc[masque_train].copy()
-y_train = y.loc[masque_train].copy()
+### Variables du modèle
 
-X_validation = X.loc[masque_validation].copy()
-y_validation = y.loc[masque_validation].copy()
+`ConsomationML.py` convertit les dates, les nombres et les booléens avec `preparer_donnees()`, puis extrait les minutes du champ `heure`.
 
-X_test = X.loc[masque_test].copy()
-y_test = y.loc[masque_test].copy()
-```
+| Colonne | Rôle | Traitement |
+|---|---|---|
+| `libelle_region` | Entrée | Encodage one-hot |
+| `mois` | Entrée, 1 à 12 | Numérique |
+| `jour_semaine` | Entrée, lundi = 0 | Numérique |
+| `heure_locale` | Entrée, 0 à 23 | Numérique |
+| `minute` | Entrée, 0 ou 30 | Numérique |
+| `ferie` | Entrée, 0 ou 1 | Numérique |
+| `vacances_scolaires` | Entrée, 0 ou 1 | Numérique |
+| `consommation` | Cible | Exclue des entrées |
 
-Le même masque est appliqué à X et y pour garder chaque observation avec sa bonne réponse. Toutes les régions d’une même date restent dans la même partie.
+La météo, l’année, le week-end et les saisons sont disponibles ou préparés, mais exclus de la sélection actuelle.
 
-Le découpage chronologique reproduit l’objectif réel : apprendre sur le passé et évaluer sur une période plus récente. Évaluer uniquement sur les exemples d’entraînement ne permettrait pas de vérifier cette capacité.
+## Modélisation et évaluation
 
-### 5. Construire la préparation et le modèle
+### Pipeline
+
+Un modèle commun est entraîné sur les douze régions. La préparation est ajustée sur les seules données d’entraînement.
 
 ```python
 preparation = ColumnTransformer(
     transformers=[
-        (
-            "region",
-            OneHotEncoder(handle_unknown="ignore"),
-            ["libelle_region"],
-        )
+        ("region", OneHotEncoder(handle_unknown="ignore"), ["libelle_region"])
     ],
     remainder="passthrough",
 )
 
-modele = Pipeline(
-    steps=[
-        ("preparation", preparation),
-        ("regression", LinearRegression()),
-    ]
-)
+modele = Pipeline([
+    ("preparation", preparation),
+    ("regression", LinearRegression()),
+])
 ```
 
-La régression travaille avec des nombres. `OneHotEncoder` représente chaque région par des indicateurs, par exemple « Bretagne = 1 » et « Normandie = 0 » pour une observation bretonne.
+`OneHotEncoder` transforme la région en indicateurs et les six autres variables sont conservées numériquement. Une région inconnue ne provoque pas d’erreur d’encodage, mais sa qualité de prédiction n’est pas garantie.
 
-`remainder="passthrough"` conserve les six autres variables numériques. `handle_unknown="ignore"` évite une erreur lors de l’encodage d’une région inconnue, mais ne garantit pas une bonne prédiction pour cette région.
+### Protocole temporel
 
-La Pipeline réunit préparation et régression. À sa création, le modèle n’a encore rien appris.
+| Partition | Dates locales incluses dans le CSV 2025 | Lignes |
+|---|---|---:|
+| Entraînement | 1er janvier au 31 août | 139 968 |
+| Validation | 1er septembre au 31 octobre | 35 136 |
+| Test | 1er novembre au 31 décembre | 35 136 |
 
-### 6. Entraîner avec fit
+Le découpage utilise `date_locale`, sans mélange aléatoire. Toutes les régions d’une même date restent dans la même partition. Le test final est réservé jusqu’au choix du modèle.
 
 ```python
 modele.fit(X_train, y_train)
-```
-
-La préparation apprend les catégories présentes dans les données d’entraînement, puis la régression ajuste ses coefficients avec X_train et y_train.
-
-Une représentation simplifiée de la formule est :
-
-```text
-consommation estimée = constante
-                    + effets de la région
-                    + coefficient × mois
-                    + coefficient × heure
-                    + autres effets du calendrier
-```
-
-Seules les observations de janvier à août participent à cet apprentissage.
-
-### 7. Prédire avec predict
-
-```python
 predictions = modele.predict(X_validation)
-```
-
-La Pipeline transforme les informations de septembre et octobre avec la préparation déjà apprise, puis calcule une estimation pour chaque ligne.
-
-`predict` ne réentraîne pas le modèle. Les vraies consommations `y_validation` ne lui sont pas fournies.
-
-Le modèle ne génère pas automatiquement les dates futures : la période prédite dépend des lignes présentes dans X_validation.
-
-### 8. Afficher et évaluer les résultats
-
-```python
-comparaison = X_validation[["libelle_region"]].copy()
-comparaison["consommation_reelle"] = y_validation
-comparaison["consommation_predite"] = predictions
-
-print(comparaison.head(10).round(1))
-
 mae = mean_absolute_error(y_validation, predictions)
-print("\nErreur absolue moyenne :", round(mae, 2))
 ```
 
-`head(10)` affiche seulement dix exemples. La MAE utilise toutes les lignes de validation.
+`fit` ajuste la préparation et la régression. `predict` applique le modèle appris aux lignes de validation, sans recevoir leurs consommations réelles. La période prédite dépend des lignes fournies : le script ne construit pas encore un horizon futur.
 
-La **MAE**, ou erreur absolue moyenne, correspond à :
+### Résultats disponibles
 
-```text
-MAE = moyenne des valeurs absolues de (réalité − prédiction)
-```
+La MAE de validation rapportée pendant le développement est **1 175,24** sur les 35 136 observations de septembre et octobre. Elle correspond à la moyenne de `abs(consommation_reelle - consommation_predite)`, dans l’unité de la cible, et non à un pourcentage.
 
-Elle utilise la même unité que la cible ; ce n’est pas un pourcentage. `round(mae, 2)` arrondit l’affichage à deux décimales. Changer 2 en 4 ne change ni les dates ni les prédictions.
-
-## Résultat observé à cette étape
-
-Lors de l’exécution rapportée pendant le développement :
-
-```text
-Erreur absolue moyenne : 1175.24
-```
-
-Exemples affichés, avec les prédictions arrondies à une décimale :
-
-| Région | Consommation réelle | Consommation prédite |
+| Région — exemples affichés | Réel | Prédit |
 |---|---:|---:|
 | Île-de-France | 5 462 | 5 858,5 |
 | Centre-Val de Loire | 1 703 | 483,5 |
 | Bretagne | 2 003 | 935,2 |
 | Occitanie | 3 392 | 2 674,9 |
 
-Ce résultat décrit la validation de septembre et octobre, pas le test final. Sans comparaison avec une référence simple et sans analyse par région, il ne permet pas à lui seul de conclure que le modèle est satisfaisant.
+Aucune comparaison à une référence naïve ni analyse par région n’a encore été réalisée. Ce résultat n’est pas un score de test final et ne constitue pas une validation opérationnelle. Il provient de l’exécution de développement rapportée ; l’entraînement n’a pas été relancé pour rédiger cette documentation.
 
-## Schéma des étapes
+### Schéma du traitement ML
 
-```mermaid
-flowchart TD
-    A["1. Lire le CSV avec pandas"] --> B["2. Préparer les données et les minutes"]
-    B --> C["3. Définir X et y"]
-    C --> D["4. Séparer selon les dates"]
-    D --> E["Janvier à août : entraînement"]
-    D --> F["Septembre et octobre : validation"]
-    D --> G["Novembre et décembre : test réservé"]
-    H["5. Pipeline : encodage + régression linéaire"] --> I["6. fit : apprendre"]
-    E --> I
-    I --> J["Modèle entraîné"]
-    J --> K["7. predict : estimer les consommations"]
-    F -->|"X_validation uniquement"| K
-    K --> L["Consommations prédites"]
-    L --> M["8. MAE : comparer à la réalité"]
-    F -->|"y_validation : vraies réponses"| M
-    M --> N["MAE observée : 1 175,24"]
+![Préparation, apprentissage et validation du modèle](<Data Consumption Prediction.png>)
+
+## Installation et exécution
+
+### Dépendances
+
+- Python et un environnement virtuel ;
+- `pandas` pour les données ;
+- `requests` pour les API ;
+- `scikit-learn` pour le modèle et les métriques ; NumPy et SciPy sont installés comme dépendances.
+
+`pathlib`, `json` et `datetime` appartiennent à la bibliothèque standard.
+
+Depuis la racine du projet, exemple PowerShell pour une nouvelle installation :
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install pandas requests scikit-learn
 ```
 
-## Limites et suite prévue
+Si un environnement existe déjà, utiliser son interpréteur. Aucun fichier de dépendances verrouillées n’est fourni actuellement ; ces commandes ne garantissent donc pas les versions exactes de l’expérience initiale.
 
-- La première version utilise uniquement la région et le calendrier.
-- Le mois, l’heure et le jour de la semaine sont traités comme des valeurs numériques linéaires. Leurs cycles et leurs interactions ne sont pas explicitement représentés.
-- Le modèle actuel partage les coefficients de calendrier entre les régions et ajoute un effet propre à chaque région.
-- Une seule année ne permet pas d’évaluer la stabilité des résultats sur plusieurs années ni toutes les saisons futures.
-- Les valeurs manquantes ne font pas l’objet d’un remplacement automatique dans la Pipeline.
-- Aucune référence simple, comparaison Random Forest, analyse d’erreur par région ou évaluation finale n’a encore été réalisée.
+### Utiliser le CSV existant
 
-Les prochaines étapes envisagées sont de comparer à une prévision simple, examiner les erreurs par région, puis essayer Random Forest sur la même validation. La météo pourra ensuite être testée en tenant compte des prévisions réellement disponibles au moment de prévoir. Le test final restera réservé jusqu’au choix du modèle.
+```powershell
+.\.venv\Scripts\python.exe ConsomationML.py
+```
 
-Une fois ce choix évalué, un réentraînement sur toute l’année pourra servir à préparer une prévision après 2025. Il faudra alors fournir les informations des nouveaux créneaux et disposer de nouvelles observations pour une évaluation indépendante.
+`data/dataset_final.csv` doit être présent. Son chemin est résolu à partir du script. Chaque lancement réentraîne le modèle, affiche dix observations de validation et la MAE. Aucun appel réseau n’est nécessaire. La Pipeline et les prédictions ne sont pas sauvegardées.
 
-## Vocabulaire à retenir
+### Reconstruire le dataset
 
-| Terme | Signification |
+L’ordre prévu est :
+
+```powershell
+.\.venv\Scripts\python.exe etl\ectraction.py
+.\.venv\Scripts\python.exe etl\dataframe.py
+.\.venv\Scripts\python.exe ConsomationML.py
+```
+
+**Défaut connu avant reconstruction :** dans `etl/dataframe.py`, la liste de colonnes utilisée pour l’aperçu contient `saison_hiver`, `saison_printemps`, `saison_ete` et `saison_automne`, absentes du DataFrame construit par ce script. Leur sélection peut provoquer un `KeyError` avant `to_csv`. Il faut les retirer de cet aperçu ou les créer dans l’ETL avant de relancer la génération complète. Ce README ne modifie pas les scripts.
+
+L’extraction réécrit les JSON et nécessite un accès réseau. Après correction du défaut, la fusion réécrit le CSV. Le CSV existant reste utilisable indépendamment pour l’entraînement.
+
+## Configuration et reproductibilité
+
+| Paramètre | Emplacement |
 |---|---|
-| Observation | Une ligne : une région à un instant donné |
-| Variable d’entrée | Une information fournie au modèle, dans X |
-| Cible | Le nombre à prédire, dans y |
-| Entraînement | Apprentissage à partir des exemples et de leurs réponses |
-| Validation | Données utilisées pour comparer les modèles et leurs réglages |
-| Test | Données réservées à l’évaluation finale |
-| `fit` | Apprendre |
-| `predict` | Produire des estimations avec le modèle appris |
-| MAE | Moyenne des écarts absolus entre estimations et réalité |
+| Année extraite | `ANNEE`, dans `etl/ectraction.py` |
+| Régions et coordonnées météo | `REGIONS`, dans `etl/ectraction.py` |
+| Correspondances académiques | `REGIONS_ACADEMIES`, dans `etl/ectraction.py` |
+| Variables du modèle | Liste `colonnes`, dans `ConsomationML.py` |
+| Périodes de validation et de test | Masques de dates, dans `ConsomationML.py` |
+| Algorithme | Étape `regression` de la Pipeline |
 
-## Note sur les commentaires du code
+Changer l’année d’extraction ne modifie pas les bornes d’apprentissage. Les masques actuels ne bornent pas le début de l’entraînement ni la fin du test ; ils doivent être revus en cas d’ajout d’autres années.
 
-Dans les imports de `ConsomationML.py`, les commentaires de `Pipeline` et `LinearRegression` sont actuellement inversés. Leur rôle correct est :
+`data/` est ignoré par Git : un clonage du dépôt ne fournit pas les données. Il faut transmettre les fichiers locaux ou les reconstruire après correction de l’ETL.
 
-```python
-from sklearn.pipeline import Pipeline  # Enchaîner la préparation et le modèle
-from sklearn.linear_model import LinearRegression  # Apprendre une formule de régression
-```
+La reproductibilité reste à renforcer par la conservation des versions de dépendances, de la date d’extraction, des paramètres des API, de l’empreinte du CSV et des métriques de chaque expérience. Un téléchargement ultérieur peut intégrer des révisions des données sources.
 
-Cette inversion concerne les commentaires et ne change pas l’exécution du programme.
+## Limites et feuille de route
+
+### Limites connues
+
+- **Périmètre :** Corse et outre-mer absents ; aucun total national calculé.
+- **Qualité :** contrôle de couverture région/jour, mais pas de validation exhaustive des demi-heures ou des doublons. Les conversions numériques peuvent créer des valeurs manquantes ; aucune imputation n’est implémentée.
+- **Météo :** une seule ville représente chaque région. L’usage en prévision devra reposer sur des variables réellement disponibles au moment de décider.
+- **Calendriers :** agrégation régionale des vacances et absence de particularités locales des jours fériés.
+- **Modèle :** calendrier traité linéairement, sans encodage cyclique ni interaction explicite avec la région ; prédictions non contraintes à être positives.
+- **Évaluation :** une seule année et une seule fenêtre de validation ; robustesse interannuelle non établie.
+- **Exploitation :** aucune sérialisation, API d’inférence, génération d’entrées futures ou journalisation des expériences. Le script ML s’exécute au chargement et n’est pas encore structuré comme module réutilisable.
+- **ETL :** défaut de colonnes dans l’aperçu à corriger avant régénération du CSV.
+
+### Prochaines étapes
+
+1. Fiabiliser l’ETL et contrôler les doublons, les valeurs manquantes et la couverture temporelle.
+2. Établir une référence naïve et mesurer les erreurs par région et par créneau.
+3. Comparer la régression linéaire et Random Forest sur des fenêtres chronologiques cohérentes.
+4. Tester le calendrier cyclique, la météo et des consommations retardées disponibles au moment de prévoir.
+5. Évaluer le modèle retenu sur le test final réservé.
+6. Versionner et sauvegarder la Pipeline, construire les entrées futures et exporter les résultats.
+
+---
+
+Documentation établie à partir des scripts et du dataset examinés, jusqu’à la première évaluation du modèle linéaire. Les références officielles des quatre sources sont indiquées dans les sections API.
