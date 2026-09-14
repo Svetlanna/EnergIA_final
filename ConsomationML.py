@@ -1,10 +1,10 @@
 import pandas as pd
 from pathlib import Path
-
+import joblib
 from sklearn.preprocessing import OneHotEncoder #transformer les noms des régions en indicateurs numériques
 from sklearn.compose import ColumnTransformer #Appliquer cette transformation à la colonne région
-from sklearn.pipeline import Pipeline #Apprendre une formule pour estimer la consommation
-from sklearn.linear_model import LinearRegression #Enchaîner la transformation et le modèle
+from sklearn.pipeline import Pipeline #Enchaîner la préparation et le modèle
+from sklearn.linear_model import LinearRegression #Apprendre une formule pour estimer la consommation
 from sklearn.metrics import mean_absolute_error
 
 
@@ -157,6 +157,19 @@ modele = Pipeline(
 
 modele.fit(X_train, y_train)
 
+
+# sauvegarder la préparation et le modèle entraîné
+dossier_modeles = dossier_script / "modeles"
+dossier_modeles.mkdir(parents=True, exist_ok=True)
+
+chemin_modele = dossier_modeles / "modele_consommation.joblib"
+
+joblib.dump(modele, chemin_modele)
+
+print("\nModèle sauvegardé :", chemin_modele)
+
+
+
 # prediction
 predictions = modele.predict(X_validation)
 
@@ -198,3 +211,108 @@ resultats_regions = (
 
 print("\nRésultats par région :")
 print(resultats_regions.round(2).to_string())
+
+
+# choisir la journée à prédire
+jour = pd.Timestamp("2025-09-01", tz="Europe/Paris")
+fin = jour + pd.DateOffset(days=1)
+
+# créer un horaire toutes les 15 minutes
+horaires = pd.date_range(
+    start=jour,
+    end=fin,
+    freq="15min",
+    inclusive="left",
+)
+
+# récupérer les régions utilisées pendant l'apprentissage
+regions = sorted(X_train["libelle_region"].unique())
+
+# créer une ligne pour chaque horaire et chaque région
+entrees_15min = pd.MultiIndex.from_product(
+    [horaires, regions],
+    names=["date_heure", "libelle_region"],
+).to_frame(index=False)
+
+# extraire les informations du calendrier
+dates = entrees_15min["date_heure"]
+
+entrees_15min["date_locale"] = (
+    dates.dt.tz_localize(None).dt.normalize()
+)
+entrees_15min["mois"] = dates.dt.month
+entrees_15min["jour_semaine"] = dates.dt.dayofweek
+entrees_15min["heure_locale"] = dates.dt.hour
+entrees_15min["minute"] = dates.dt.minute
+
+# récupérer les jours fériés et vacances par région et par date
+calendrier = df[
+    [
+        "date_locale",
+        "libelle_region",
+        "ferie",
+        "vacances_scolaires",
+    ]
+].drop_duplicates()
+
+entrees_15min = entrees_15min.merge(
+    calendrier,
+    on=["date_locale", "libelle_region"],
+    how="left",
+    validate="many_to_one",
+)
+
+# vérifier que les informations nécessaires sont présentes
+if entrees_15min[colonnes].isna().any().any():
+    raise ValueError(
+        "Calendrier incomplet pour la journée demandée. "
+        "Fournir les jours fériés et vacances de cette date pour chaque région."
+    )
+
+# prédire directement la consommation à chaque quart d'heure
+entrees_15min["consommation_predite"] = modele.predict(
+    entrees_15min[colonnes]
+)
+
+# conserver les prédictions séparément des observations réelles
+resultats_15min = entrees_15min[
+    [
+        "date_heure",
+        "libelle_region",
+        "consommation_predite",
+    ]
+].copy()
+
+resultats_15min["date_creation_utc"] = pd.Timestamp.now(tz="UTC")
+resultats_15min["origine"] = "prediction_modele"
+resultats_15min["date_fin_entrainement"] = (
+    df.loc[masque_train, "date_locale"].max().strftime("%Y-%m-%d")
+)
+resultats_15min = resultats_15min.sort_values(
+    ["date_heure", "libelle_region"]
+)
+
+# sauvegarder les prédictions dans un fichier CSV
+# Le dataset_final.csv n'est pas modifié.
+dossier_predictions = dossier_script / "predictions"
+dossier_predictions.mkdir(parents=True, exist_ok=True)
+
+chemin_predictions = (
+    dossier_predictions / f"predictions_15min_{jour:%Y-%m-%d}.csv"
+)
+resultats_15min.to_csv(
+    chemin_predictions,
+    index=False,
+    encoding="utf-8-sig",
+)
+
+# afficher quelques horaires pour la première région
+print("\nPremières prédictions pour chaque région :")
+
+for region, tableau in resultats_15min.groupby("libelle_region"):
+    print("\nRégion :", region)
+    print(tableau.head(4).round(2).to_string(index=False))
+
+print("\nNombre de prédictions par région :")
+print(resultats_15min.groupby("libelle_region").size())
+
