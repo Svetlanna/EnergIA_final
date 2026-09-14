@@ -166,11 +166,35 @@ comparaison["consommation_predite"] = predictions
 
 
 
-
-print("\nExemples de prédictions :")
-print(comparaison.head(10).round(1))
-
-# 3. Calculer l'erreur moyenne sur toute la validation.
+# calculer l'erreur moyenne sur toute la validation
 mae = mean_absolute_error(y_validation, predictions)
 
-print("\nErreur absolue moyenne :", round(mae, 2))
+
+
+comparaison["erreur_signee"] = (
+    comparaison["consommation_predite"]
+    - comparaison["consommation_reelle"]
+)
+
+# 2. Mesurer la taille de l'écart, sans son signe.
+comparaison["erreur_absolue"] = (
+    comparaison["erreur_signee"].abs()
+)
+
+
+
+# Regrouper les observations et calculer les mesures par région.
+resultats_regions = (
+    comparaison
+    .groupby("libelle_region")
+    .agg(
+        nombre_predictions=("erreur_absolue", "count"),
+        consommation_moyenne=("consommation_reelle", "mean"),
+        mae=("erreur_absolue", "mean"),
+        erreur_signee_moyenne=("erreur_signee", "mean"),
+    )
+    .sort_values("mae", ascending=False)
+)
+
+print("\nRésultats par région :")
+print(resultats_regions.round(2).to_string())
