@@ -243,7 +243,7 @@ if __name__ == "__main__":
     print(couverture.to_string())
 
     colonnes = [
-        "libelle_region",
+          "libelle_region",
         "annee",
         "mois",
         "jour_semaine",
@@ -251,14 +251,10 @@ if __name__ == "__main__":
         "weekend",
         "ferie",
         "vacances_scolaires",
-        "saison_hiver",
-        "saison_printemps",
-        "saison_ete",
-        "saison_automne",
     ]
 
     print("\nAperçu :")
-    print(df[colonnes].head(10).to_string(index=False))
+
 
     print("\nValeurs manquantes :")
     print(df[colonnes].isna().sum())
